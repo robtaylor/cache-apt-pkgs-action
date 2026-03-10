@@ -18,8 +18,11 @@ cache_dir="${1}"
 # Repositories to add before installing packages.
 add_repository="${3}"
 
+# GPG-signed third-party repository sources.
+apt_sources="${4}"
+
 # List of the packages to use.
-input_packages="${@:4}"
+input_packages="${@:5}"
 
 if ! apt-fast --version > /dev/null 2>&1; then
   log "Installing apt-fast for optimized installs..."
@@ -40,6 +43,9 @@ if [ -n "${add_repository}" ]; then
   log "done"
   log_empty_line
 fi
+
+# Set up GPG-signed third-party apt sources if specified
+setup_apt_sources "${apt_sources}"
 
 log "Updating APT package list..."
 if [[ -z "$(find -H /var/lib/apt/lists -maxdepth 0 -mmin -5)" ]]; then
