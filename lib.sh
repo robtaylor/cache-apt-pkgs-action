@@ -223,6 +223,48 @@ function derive_keyring_name {
 }
 
 ###############################################################################
+# Extracts the repo URL from a deb line, stripping the deb prefix and options.
+# Arguments:
+#   A deb or deb-src line.
+# Returns:
+#   The repo URL (first URL after stripping prefix and options bracket).
+###############################################################################
+function extract_repo_url {
+  echo "${1}" | sed -E 's/^deb(-src)?[[:space:]]+(\[[^]]*\][[:space:]]+)?//' | awk '{print $1}'
+}
+
+###############################################################################
+# Removes existing apt source files that reference the same repo URL.
+# This prevents "Conflicting values set for option Signed-By" errors when
+# the runner already has a source configured (e.g., NVIDIA CUDA repo on
+# GPU runners) and we add a new source with a different keyring path.
+# Arguments:
+#   The repo URL to check for conflicts.
+#   The file path we're about to write (excluded from removal).
+###############################################################################
+function remove_conflicting_sources {
+  local repo_url="${1}"
+  local our_list_path="${2}"
+
+  # Nothing to check if repo_url is empty.
+  if [ -z "${repo_url}" ]; then
+    return
+  fi
+
+  for src_file in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+    # Skip if glob didn't match any files.
+    test -f "${src_file}" || continue
+    # Skip our own file.
+    test "${src_file}" = "${our_list_path}" && continue
+    # Check if this file references the same repo URL (fixed-string match).
+    if grep -qF "${repo_url}" "${src_file}" 2>/dev/null; then
+      log "  Removing conflicting source: ${src_file}"
+      sudo rm -f "${src_file}"
+    fi
+  done
+}
+
+###############################################################################
 # Sets up GPG-signed third-party apt sources.
 # Arguments:
 #   Multi-line string where each line is: key_url | source_spec
@@ -296,12 +338,25 @@ function setup_apt_sources {
       if is_deb822_format "${list_content}"; then
         # deb822 format (.sources file) - inject Signed-By as a field.
         local list_path="/etc/apt/sources.list.d/${list_name}.sources"
+        # Remove any existing source files that reference the same repo URLs
+        # to prevent signed-by conflicts.
+        local repo_urls=$(echo "${list_content}" | grep -i '^URIs:' | sed 's/^URIs:[[:space:]]*//')
+        for url in ${repo_urls}; do
+          remove_conflicting_sources "${url}" "${list_path}"
+        done
         local processed_content=$(inject_signed_by_deb822 "${list_content}" "${keyring_path}")
         echo "${processed_content}" | sudo tee "${list_path}" > /dev/null
         log "  Source list (deb822) written to ${list_path}"
       else
         # Traditional one-line format (.list file) - inject signed-by per line.
         local list_path="/etc/apt/sources.list.d/${list_name}.list"
+        # Remove conflicting sources for each deb line's repo URL.
+        while IFS= read -r deb_line; do
+          if echo "${deb_line}" | grep -qE '^deb(-src)?[[:space:]]+'; then
+            local repo_url=$(extract_repo_url "${deb_line}")
+            remove_conflicting_sources "${repo_url}" "${list_path}"
+          fi
+        done <<< "${list_content}"
         local processed_content=""
         while IFS= read -r deb_line; do
           if [ -n "${deb_line}" ]; then
@@ -317,6 +372,9 @@ function setup_apt_sources {
       # Source spec is an inline deb line.
       local list_name="${keyring_name}"
       local list_path="/etc/apt/sources.list.d/${list_name}.list"
+      # Remove any existing source files that reference the same repo URL.
+      local repo_url=$(extract_repo_url "${source_spec}")
+      remove_conflicting_sources "${repo_url}" "${list_path}"
       local processed_line=$(inject_signed_by "${source_spec}" "${keyring_path}")
       echo "${processed_line}" | sudo tee "${list_path}" > /dev/null
       log "- Inline source written to ${list_path}"

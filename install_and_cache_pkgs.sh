@@ -48,7 +48,9 @@ fi
 setup_apt_sources "${apt_sources}"
 
 log "Updating APT package list..."
-if [[ -z "$(find -H /var/lib/apt/lists -maxdepth 0 -mmin -5)" ]]; then
+# Force update when custom sources were added — the staleness check only
+# reflects the last update, which may predate the newly added repos.
+if [ -n "${apt_sources}" ] || [ -n "${add_repository}" ] || [[ -z "$(find -H /var/lib/apt/lists -maxdepth 0 -mmin -5)" ]]; then
   sudo apt-fast update > /dev/null
   log "done"
 else
@@ -82,7 +84,11 @@ install_log_filepath="${cache_dir}/install.log"
 
 log "Clean installing ${package_count} packages..."
 # Zero interaction while installing or upgrading the system via apt.
-sudo DEBIAN_FRONTEND=noninteractive apt-fast --yes install ${packages} > "${install_log_filepath}"
+# Explicitly check exit status since set +e (from lib.sh) is active.
+if ! sudo DEBIAN_FRONTEND=noninteractive apt-fast --yes install ${packages} > "${install_log_filepath}"; then
+  log_err "Failed to install packages. apt-fast exited with an error (see messages above)."
+  exit 5
+fi
 log "done"
 log "Installation log written to ${install_log_filepath}"
 
