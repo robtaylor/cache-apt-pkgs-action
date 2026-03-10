@@ -155,6 +155,7 @@ fi
 base_pkgs_hash="$(dpkg-query -W -f='${binary:Package}\n' | sha1sum | cut -f1 -d' ')"
 value="${value} base:${base_pkgs_hash}"
 log "- Base packages hash '${base_pkgs_hash}' added to value."
+echo "::notice::Runner base image fingerprint: ${base_pkgs_hash}. Runners with different pre-installed packages produce different fingerprints and cannot share caches."
 
 log "- Value to hash is '${value}'."
 
