@@ -7,10 +7,11 @@ on:
         type: boolean
         required: false
         default: false
-  push:
-    branches: [master, dev, staging]
-  pull_request:
-    types: [opened, synchronize]
+  # Disabled on this debug branch to avoid noise.
+  # push:
+  #   branches: [master, dev, staging]
+  # pull_request:
+  #   types: [opened, synchronize]
 
 env:
   DEBUG: ${{ github.event.inputs.debug || false }}
