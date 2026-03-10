@@ -649,3 +649,67 @@ jobs:
           echo "Expected failure but got: ${{ steps.execute.outcome }}"
           exit 1
         shell: bash
+
+  apt_sources_conflicting_source:
+    runs-on: ubuntu-latest
+    name: "apt-sources replaces conflicting pre-existing source."
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pre-create conflicting source
+        run: |
+          # Simulate a runner that already has the GitHub CLI repo configured
+          # with a different keyring path (like NVIDIA runners have for CUDA).
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/fake-old-keyring.gpg] https://cli.github.com/packages stable main" \
+            | sudo tee /etc/apt/sources.list.d/existing-gh-repo.list
+          # Create a dummy keyring file so the source looks legitimate.
+          sudo touch /usr/share/keyrings/fake-old-keyring.gpg
+        shell: bash
+      - name: Execute
+        id: execute
+        uses: ./
+        with:
+          packages: gh
+          apt-sources: |
+            https://cli.github.com/packages/githubcli-archive-keyring.gpg | deb [arch=amd64] https://cli.github.com/packages stable main
+          version: ${{ github.run_id }}-${{ github.run_attempt }}-apt_sources_conflict
+          debug: ${{ env.DEBUG }}
+      - name: Verify
+        run: |
+          # Action should succeed despite the pre-existing conflicting source.
+          test "${{ steps.execute.outputs.cache-hit }}" = "false"
+          echo "${{ steps.execute.outputs.package-version-list }}" | grep -q "gh="
+          # The conflicting source file should have been removed.
+          test ! -f /etc/apt/sources.list.d/existing-gh-repo.list
+          # Our source file should exist.
+          test -f /etc/apt/sources.list.d/cli-github-com-packages-githubcli-archive-keyring-gpg.list
+          # gh should be callable.
+          gh --version
+        shell: bash
+
+  apt_sources_force_update:
+    runs-on: ubuntu-latest
+    name: "apt-sources forces apt update even if lists are fresh."
+    steps:
+      - uses: actions/checkout@v4
+      - name: Freshen apt lists
+        run: |
+          # Ensure apt lists are fresh so the 5-minute staleness check would
+          # normally skip the update. The action should force update anyway
+          # because apt-sources is specified.
+          sudo apt-get update -qq
+        shell: bash
+      - name: Execute
+        id: execute
+        uses: ./
+        with:
+          packages: gh
+          apt-sources: |
+            https://cli.github.com/packages/githubcli-archive-keyring.gpg | deb [arch=amd64] https://cli.github.com/packages stable main
+          version: ${{ github.run_id }}-${{ github.run_attempt }}-apt_sources_force_update
+          debug: ${{ env.DEBUG }}
+      - name: Verify
+        run: |
+          test "${{ steps.execute.outputs.cache-hit }}" = "false"
+          echo "${{ steps.execute.outputs.package-version-list }}" | grep -q "gh="
+          gh --version
+        shell: bash
