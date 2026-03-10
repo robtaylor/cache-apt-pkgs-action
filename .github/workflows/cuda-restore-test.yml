@@ -1,6 +1,8 @@
 name: CUDA Cache Restore Test
 on:
   workflow_dispatch:
+  push:
+    branches: [debug/cuda-restore-test]
 
 env:
   SHELLOPTS: errexit:pipefail
