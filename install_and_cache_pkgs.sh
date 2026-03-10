@@ -18,8 +18,11 @@ cache_dir="${1}"
 # Repositories to add before installing packages.
 add_repository="${3}"
 
+# GPG-signed third-party repository sources.
+apt_sources="${4}"
+
 # List of the packages to use.
-input_packages="${@:4}"
+input_packages="${@:5}"
 
 if ! apt-fast --version > /dev/null 2>&1; then
   log "Installing apt-fast for optimized installs..."
@@ -41,8 +44,13 @@ if [ -n "${add_repository}" ]; then
   log_empty_line
 fi
 
+# Set up GPG-signed third-party apt sources if specified
+setup_apt_sources "${apt_sources}"
+
 log "Updating APT package list..."
-if [[ -z "$(find -H /var/lib/apt/lists -maxdepth 0 -mmin -5)" ]]; then
+# Force update when custom sources were added — the staleness check only
+# reflects the last update, which may predate the newly added repos.
+if [ -n "${apt_sources}" ] || [ -n "${add_repository}" ] || [[ -z "$(find -H /var/lib/apt/lists -maxdepth 0 -mmin -5)" ]]; then
   sudo apt-fast update > /dev/null
   log "done"
 else
@@ -76,7 +84,11 @@ install_log_filepath="${cache_dir}/install.log"
 
 log "Clean installing ${package_count} packages..."
 # Zero interaction while installing or upgrading the system via apt.
-sudo DEBIAN_FRONTEND=noninteractive apt-fast --yes install ${packages} > "${install_log_filepath}"
+# Explicitly check exit status since set +e (from lib.sh) is active.
+if ! sudo DEBIAN_FRONTEND=noninteractive apt-fast --yes install ${packages} > "${install_log_filepath}"; then
+  log_err "Failed to install packages. apt-fast exited with an error (see messages above)."
+  exit 5
+fi
 log "done"
 log "Installation log written to ${install_log_filepath}"
 
@@ -101,11 +113,15 @@ for installed_package in ${installed_packages}; do
     read package_name package_ver < <(get_package_name_ver "${installed_package}")
     log "  * Caching ${package_name} to ${cache_filepath}..."
 
-    # Pipe all package files (no folders), including symlinks, their targets, and installation control data to Tar.
+    # Pipe all package files (no folders), including symlinks, their targets,
+    # and all dpkg metadata (info files) to Tar.
     tar -cf "${cache_filepath}" -C / --verbatim-files-from --files-from <(
       { dpkg -L "${package_name}" &&
-        get_install_script_filepath "" "${package_name}" "preinst" &&
-        get_install_script_filepath "" "${package_name}" "postinst" ; } |
+        # Include all dpkg info files for this package (list, md5sums,
+        # conffiles, triggers, preinst, postinst, prerm, postrm, etc.)
+        # so dpkg recognizes the package after cache restore.
+        ls -1 /var/lib/dpkg/info/${package_name}.* 2>/dev/null &&
+        ls -1 /var/lib/dpkg/info/${package_name}:*.* 2>/dev/null ; } |
       while IFS= read -r f; do
         if test -f "${f}" -o -L "${f}"; then
           get_tar_relpath "${f}"
@@ -118,6 +134,9 @@ for installed_package in ${installed_packages}; do
         fi
       done
     )
+
+    # Save the dpkg status entry so we can register the package on restore.
+    dpkg -s "${package_name}" > "${cache_dir}/${installed_package}.dpkg-status" 2>/dev/null || true
 
     log "    done (compressed size $(du -h "${cache_filepath}" | cut -f1))."
   fi
